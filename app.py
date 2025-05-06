@@ -1,15 +1,17 @@
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
 import os
 
 app = Flask(__name__)
 CORS(app)
 
-# Dynamic path for SQLite (important for Render)
+# Dynamic database path - defaults to SQLite, can be overridden by DATABASE_URL (Render-compatible)
 basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'site.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", 'sqlite:///' + os.path.join(basedir, 'site.db'))
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 db = SQLAlchemy(app)
 
 # Models
@@ -25,6 +27,11 @@ class TeamMember(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     role = db.Column(db.String(100), nullable=False)
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password = db.Column(db.String(200), nullable=False)
 
 # Routes
 @app.route('/')
@@ -56,13 +63,35 @@ def get_team():
         } for member in members
     ])
 
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({'message': 'Email and password are required'}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({'message': 'Email already registered'}), 400
+
+    hashed_password = generate_password_hash(password)
+    user = User(email=email, password=hashed_password)
+    db.session.add(user)
+    db.session.commit()
+
+    return jsonify({'message': 'Registration successful'}), 201
+
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
-    print(f'Login attempt: {email}, {password}')
-    return jsonify({'message': 'Login attempt received'}), 200
+
+    user = User.query.filter_by(email=email).first()
+    if user and check_password_hash(user.password, password):
+        return jsonify({'message': 'Login successful'}), 200
+    return jsonify({'message': 'Invalid email or password'}), 401
 
 @app.route('/create-event', methods=['POST'])
 def create_event():
@@ -94,10 +123,10 @@ def contact():
     print('Contact form received:', data)
     return jsonify({'message': 'Message sent successfully'}), 200
 
-# Create tables if not exist (once)
+# Create tables if they don't exist
 with app.app_context():
     db.create_all()
 
-# Do not run app.run() on Render
+# Local debug mode
 if __name__ == '__main__':
     app.run(debug=True)
